@@ -1,15 +1,17 @@
 import sys
+import os
 import subprocess
-import re
 import requests
 import winreg
-import os
+import re
 import xml.etree.ElementTree as ET
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QLabel, 
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QPushButton, QLabel, 
                             QVBoxLayout, QWidget, QMessageBox, QProgressBar,
-                            QCheckBox, QComboBox, QFrame, QHBoxLayout)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QIcon, QPalette, QColor, QPixmap
+                            QCheckBox, QComboBox, QFrame, QHBoxLayout,
+                            QLineEdit, QFileDialog, QGroupBox, QRadioButton,
+                            QButtonGroup, QTabWidget, QTextEdit)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QPixmap
 
 class WindowsVersion:
     def __init__(self):
@@ -20,44 +22,81 @@ class WindowsVersion:
 
     def get_windows_info(self):
         try:
-            # Obter informações do sistema
-            result = subprocess.run(['systeminfo'], capture_output=True, text=True)
+            # Obter informações do sistema usando wmic
+            result = subprocess.run(['wmic', 'os', 'get', 'Caption,Version,BuildNumber', '/value'], 
+                                 capture_output=True, text=True)
             output = result.stdout
 
-            # Extrair versão
-            version_match = re.search(r'Versão do SO:\s+([\d.]+)', output)
+            # Extrair informações usando expressões regulares
+            version_match = re.search(r'Version=([\d.]+)', output)
             if version_match:
                 self.version = version_match.group(1)
 
-            # Extrair edição
-            edition_match = re.search(r'Edição do SO:\s+(.+)', output)
-            if edition_match:
-                self.edition = edition_match.group(1)
-
-            # Extrair build
-            build_match = re.search(r'Build do SO:\s+(\d+)', output)
+            build_match = re.search(r'BuildNumber=(\d+)', output)
             if build_match:
                 self.build = build_match.group(1)
 
+            # Extrair edição do Windows
+            edition_match = re.search(r'Caption=Microsoft Windows ([\w\s]+)', output)
+            if edition_match:
+                self.edition = edition_match.group(1)
+
             # Determinar versão principal
-            if "10.0.22000" in self.version or "10.0.22621" in self.version:
-                self.version = "Windows 11"
-            elif "10.0.10240" in self.version or "10.0.10586" in self.version:
-                self.version = "Windows 10"
-            elif "6.2" in self.version or "6.3" in self.version:
-                self.version = "Windows 8"
+            if self.version:
+                if "10.0.22000" in self.version or "10.0.22621" in self.version:
+                    self.version = "Windows 11"
+                elif "10.0" in self.version:
+                    self.version = "Windows 10"
+                elif "6.2" in self.version or "6.3" in self.version:
+                    self.version = "Windows 8"
 
             # Normalizar edição
-            if "Core" in self.edition:
-                self.edition = "Core"
-            elif "Professional" in self.edition:
-                self.edition = "Pro"
-            elif "Enterprise" in self.edition:
-                self.edition = "Enterprise"
-            elif "Education" in self.edition:
-                self.edition = "Education"
-            elif "Home" in self.edition:
-                self.edition = "Home"
+            if self.edition:
+                # Remover espaços extras e converter para minúsculas para comparação
+                edition_lower = self.edition.lower().strip()
+                
+                if "professional" in edition_lower or "pro" in edition_lower:
+                    self.edition = "Pro"
+                elif "enterprise" in edition_lower:
+                    self.edition = "Enterprise"
+                elif "education" in edition_lower:
+                    self.edition = "Education"
+                elif "home" in edition_lower:
+                    self.edition = "Home"
+                elif "core" in edition_lower:
+                    self.edition = "Core"
+
+            # Se não conseguiu detectar, tenta método alternativo
+            if not self.version or not self.edition:
+                result = subprocess.run(['systeminfo'], capture_output=True, text=True)
+                output = result.stdout
+
+                if not self.version:
+                    version_match = re.search(r'Versão do SO:\s+([\d.]+)', output)
+                    if version_match:
+                        self.version = version_match.group(1)
+
+                if not self.edition:
+                    edition_match = re.search(r'Edição do SO:\s+(.+)', output)
+                    if edition_match:
+                        self.edition = edition_match.group(1)
+                        # Normalizar a edição novamente
+                        edition_lower = self.edition.lower().strip()
+                        if "professional" in edition_lower or "pro" in edition_lower:
+                            self.edition = "Pro"
+                        elif "enterprise" in edition_lower:
+                            self.edition = "Enterprise"
+                        elif "education" in edition_lower:
+                            self.edition = "Education"
+                        elif "home" in edition_lower:
+                            self.edition = "Home"
+                        elif "core" in edition_lower:
+                            self.edition = "Core"
+
+            # Debug: Imprimir informações detectadas
+            print(f"Versão detectada: {self.version}")
+            print(f"Edição detectada: {self.edition}")
+            print(f"Build detectado: {self.build}")
 
         except Exception as e:
             print(f"Erro ao obter informações do Windows: {str(e)}")
@@ -354,7 +393,8 @@ class OfficeInstaller:
         try:
             # Verificar se a pasta existe
             if not os.path.exists(self.office_path):
-                return False, "Pasta Projectoffice24 não encontrada!"
+                os.makedirs(self.office_path, exist_ok=True)
+                return False, "Pasta Projectoffice24 não encontrada! Por favor, verifique se o instalador do Office está presente."
 
             # Obter informações da versão selecionada
             version_info = self.version_manager.get_version_info(version_name)
@@ -364,17 +404,22 @@ class OfficeInstaller:
             # Verificar se o arquivo de configuração existe
             xml_path = os.path.join(self.office_path, version_info['xml_file'])
             if not os.path.exists(xml_path):
-                return False, "Arquivo de configuração não encontrado!"
+                return False, f"Arquivo de configuração {version_info['xml_file']} não encontrado!"
+
+            # Verificar se o arquivo setup.exe existe
+            setup_path = os.path.join(self.office_path, version_info['setup_file'])
+            if not os.path.exists(setup_path):
+                return False, f"Arquivo {version_info['setup_file']} não encontrado! Por favor, verifique se o instalador do Office está presente."
 
             # Executar o instalador do Office
-            setup_path = os.path.join(self.office_path, version_info['setup_file'])
-            result = subprocess.run([setup_path, '/configure', xml_path],
-                                  capture_output=True, text=True)
-            
-            if result.returncode == 0:
+            try:
+                result = subprocess.run([setup_path, '/configure', xml_path],
+                                      capture_output=True, text=True, check=True)
                 return True, f"Office {version_name} instalado com sucesso!"
-            else:
-                return False, f"Erro ao instalar Office: {result.stderr}"
+            except subprocess.CalledProcessError as e:
+                return False, f"Erro ao instalar Office: {e.stderr}"
+            except FileNotFoundError:
+                return False, f"Arquivo {setup_path} não encontrado. Verifique se o instalador do Office está presente."
 
         except Exception as e:
             return False, f"Erro ao instalar Office: {str(e)}"
@@ -411,6 +456,47 @@ class ActivationThread(QThread):
         super().__init__()
         self.install_office = install_office
         self.version_name = version_name
+        self.cscript_path = self.find_cscript()
+
+    def find_cscript(self):
+        # Caminhos possíveis do cscript.exe
+        possible_paths = [
+            r"C:\Windows\System32\cscript.exe",
+            r"C:\Windows\SysWOW64\cscript.exe"
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
+        return None
+
+    def run_slmgr_command(self, args):
+        try:
+            if not self.cscript_path:
+                raise FileNotFoundError("Comando cscript.exe não encontrado")
+
+            # Construir o comando completo
+            slmgr_path = r"C:\Windows\System32\slmgr.vbs"
+            if not os.path.exists(slmgr_path):
+                slmgr_path = r"C:\Windows\SysWOW64\slmgr.vbs"
+                if not os.path.exists(slmgr_path):
+                    raise FileNotFoundError("Arquivo slmgr.vbs não encontrado")
+
+            full_args = [self.cscript_path, "//Nologo", slmgr_path] + args
+
+            # Executar o comando
+            result = subprocess.run(full_args, 
+                                  capture_output=True, 
+                                  text=True, 
+                                  check=True,
+                                  creationflags=subprocess.CREATE_NO_WINDOW)
+            return result
+        except subprocess.CalledProcessError as e:
+            raise Exception(f"Erro ao executar slmgr: {e.stderr}")
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"Erro: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Erro inesperado: {str(e)}")
 
     def run(self):
         try:
@@ -461,29 +547,29 @@ class ActivationThread(QThread):
                 self.status.emit(f"Tentando chave {i+1} de {total_keys}...")
                 self.progress.emit(int((i / total_keys) * 100))
 
-                # Tentar instalar a chave
-                result = subprocess.run(['slmgr', '/ipk', key], 
-                                      capture_output=True, text=True)
-                
-                if result.returncode == 0:
+                try:
+                    # Tentar instalar a chave
+                    result = self.run_slmgr_command(['/ipk', key])
                     self.status.emit(f"Chave {key} instalada com sucesso!")
                     break
-                else:
-                    self.status.emit(f"Chave {key} falhou, tentando próxima...")
+                except Exception as e:
+                    self.status.emit(f"Chave {key} falhou: {str(e)}")
 
             # Ativar Windows
             self.status.emit("Ativando Windows...")
-            result = subprocess.run(['slmgr', '/ato'], 
-                                  capture_output=True, text=True)
-            if result.returncode != 0:
-                self.error.emit(f"Erro ao ativar Windows: {result.stderr}")
+            try:
+                result = self.run_slmgr_command(['/ato'])
+            except Exception as e:
+                self.error.emit(f"Erro ao ativar Windows: {str(e)}")
                 return
 
             # Verificar status
             self.status.emit("Verificando status da ativação...")
-            result = subprocess.run(['slmgr', '/dli'], 
-                                  capture_output=True, text=True)
-            self.finished.emit(result.stdout)
+            try:
+                result = self.run_slmgr_command(['/dli'])
+                self.finished.emit(result.stdout)
+            except Exception as e:
+                self.error.emit(f"Erro ao verificar status: {str(e)}")
 
         except Exception as e:
             self.error.emit(f"Erro inesperado: {str(e)}")
@@ -491,7 +577,8 @@ class ActivationThread(QThread):
     def is_admin(self):
         try:
             return subprocess.run(['net', 'session'], 
-                                capture_output=True).returncode == 0
+                                capture_output=True,
+                                creationflags=subprocess.CREATE_NO_WINDOW).returncode == 0
         except:
             return False
 
